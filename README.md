@@ -1,2 +1,12 @@
-# sql_data_warehouse_project
-Build a modern DWH with SQL Server, including ETL processes, Data Modelling and Analytics
+# Data Warehouse and Analytics Project
+
+- Inspired from Data with Baraa
+- Built a modern DWH with SQL Server
+  +) ETL processess
+  +) SQL queries insights
+  +) PBI reporting
+
+
+## Data Architecture
+- The architecture consist of 3 layers: **Bronze, Silver and Gold**
+![]()
