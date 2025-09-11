@@ -295,27 +295,23 @@ FROM bronze.erp_cust_az12
 WHERE CID != TRIM(CID);
 
 
-
-
 -- CHECK for mismatches between clean_CID and crm_cust_info
 SELECT *
 FROM silver.crm_cust_info cust
-FULL OUTER JOIN #clean_CID clean -- #clean_CID is a temp table ('erp_cust_az12'   with trimmed 'CID' for Joining)
+FULL OUTER JOIN ##clean_CID clean -- ##clean_CID is a temp table ('erp_cust_az12'   with trimmed 'CID' for Joining)
 ON cust.cst_key = clean.CID
 WHERE CID IS NULL OR
       cst_key IS NULL;
 
 
-
-
 -- BDATE: check for nulls
 SELECT BDATE
-FROM #clean_CID
+FROM ##clean_CID
 WHERE BDATE IS NULL;
 
 -- GEN: check for values
 SELECT DISTINCT GEN
-FROM #clean_CID;
+FROM ##clean_CID;
 -- QUERY RETURNS: type of values from Gender
 
 
@@ -331,6 +327,8 @@ FROM bronze.erp_cust_az12
 GROUP BY GEN;
 
 
+
+
 -- CHECK: ZGEN - post-transform
 WITH fix_GEN as 
 (
@@ -342,7 +340,7 @@ SELECT
 		WHEN GEN = 'M' THEN 'Male'
 		ELSE GEN
 	END AS new_GEN
-FROM #clean_CID az
+FROM ##clean_CID az
 LEFT JOIN silver.crm_cust_info cust
 ON cust.cst_key = az.CID
 )
@@ -363,7 +361,7 @@ WHEN GEN ='F' THEN 'Female'
 WHEN GEN = 'M' THEN 'Male'
 ELSE GEN
 END AS new_GEN
-FROM #clean_CID az
+FROM ##clean_CID az
 LEFT JOIN silver.crm_cust_info cust
 ON cust.cst_key = az.CID
 )
@@ -371,5 +369,90 @@ ON cust.cst_key = az.CID
 SELECT *
 FROM fix_GEN
 WHERE new_GEN != cst_gndr
+AND cst_gndr != 'N/A'
 
 ------------------------- END: bronze.erp_cust_az12-----------------------------
+
+------------------------- START: bronze.erp_loc_a101-----------------------------
+
+-- Cardiniality Check: CID 
+SELECT DISTINCT(LEN(CID)) 
+FROM bronze.erp_loc_a101;
+
+
+-- CHECK CID: string not following %-% format
+SELECT *
+FROM bronze.erp_loc_a101
+WHERE CID NOT LIKE '%-%';
+
+-- CHECK CNTRY: null
+SELECT DISTINCT CNTRY
+FROM bronze.erp_loc_a101;
+
+-- CNTRY: pre-transofrmation
+SELECT DISTINCT(CNTRY)
+FROM bronze.erp_loc_a101
+
+-- CHECK: blank spaces
+SELECT *
+FROM bronze.erp_loc_a101
+WHERE CNTRY != TRIM(CNTRY);
+
+-- Data Enrichment Fix
+With clean_erp_loc as
+(
+	SELECT
+		CASE 
+		WHEN CHARINDEX('-',CID) != 0 THEN TRIM(REPLACE(CID,'-',''))
+		ELSE TRIM(CID)
+		END as CID -- remove '-' from CID
+	   ,CASE
+		WHEN CNTRY = 'US' OR CNTRY = 'USA' THEN 'United States'
+		WHEN CNTRY = '' OR CNTRY IS NULL OR CNTRY = 'DE' THEN 'N/A'
+		ELSE TRIM(CNTRY)
+		END AS CNTRY -- Data enrichment for CNTRY
+	FROM bronze.erp_loc_a101
+)
+
+-- CHECK for mismatches between cleaned_erp_loc_a101 & crm_cust_info
+SELECT *
+FROM clean_erp_loc clean
+FULL OUTER JOIN silver.crm_cust_info cust
+ON clean.CID = cust.cst_key
+WHERE CID IS NULL 
+	  OR cst_key IS NULL;
+
+------------------------- END: bronze.erp_loc_a101-----------------------------
+
+
+------------------------- START: bronze.erp_px_cat_g1v2-----------------------------
+SELECT TOP 1000 *
+FROM bronze.erp_px_cat_g1v2;
+
+SELECT TOP 1000 *
+FROM silver.crm_prod_info;
+
+-- Col 'ID': check quality 
+SELECT *
+FROM bronze.erp_px_cat_g1v2
+WHERE ID IS NULL;
+
+-- mismatches:col 'ID' of erp_px_cat_g1v2  vs silver.crm_prod_info 
+SELECT *
+FROM bronze.erp_px_cat_g1v2 as g1v2
+FULL OUTER JOIN silver.crm_prod_info as prod
+ON g1v2.ID = prod.cat_id
+WHERE ID IS NULL 
+OR cat_id IS NULL;
+-- RETURNS: mismatches between 2
+
+-- Col 'CAT': quality check
+SELECT DISTINCT CAT
+FROM bronze.erp_px_cat_g1v2;
+
+
+
+
+
+
+------------------------- END: bronze.erp_px_cat_g1v2-----------------------------

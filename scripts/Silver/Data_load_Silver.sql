@@ -59,6 +59,7 @@ GO
 -- logic for re-runs
 IF (SELECT COUNT(*) FROM silver.crm_prod_info) != 0
 	TRUNCATE TABLE silver.crm_prod_info
+
 INSERT INTO [silver].[crm_prod_info]
 		   ([prd_id]
 		   ,[cat_id]
@@ -135,18 +136,14 @@ SELECT TRIM([sls_ord_num])
   FROM [bronze].[crm_sales_details]
   ;
 
+----------- END: Insert into [silver].[crm_sales_details] -------------
 GO
 
 
-
-
------------ END: Insert into [silver].[crm_sales_details] -------------
-
-
---- START : Insert into [silver].[erp_cust_az12]
+------------------------- START : Insert into [silver].[erp_cust_az12]----------------------
 IF (SELECT COUNT(*) FROM silver.erp_cust_az12) != 0
 	BEGIN
-	TRUNCATE TABLE silver.crm_sales_details
+	TRUNCATE TABLE silver.erp_cust_az12
 	END;
 
 INSERT INTO [silver].[erp_cust_az12]
@@ -156,37 +153,83 @@ INSERT INTO [silver].[erp_cust_az12]
 		   )
 
 SELECT 
-	   [CID]
-      ,[BDATE]
-      ,[GEN]
-
-  FROM -- LEFT JOIN silver.crm_cust_info to fill invalid GEN
-		(	SELECT 
-				CID,
-				BDATE,
-				CASE 
-				WHEN GEN IS NULL OR GEN = '' THEN cst_gndr
-				WHEN GEN ='F' THEN 'Female'
-				WHEN GEN = 'M' THEN 'Male'
-				ELSE GEN
-				END AS GEN
-			FROM -- TRIM CID to match with cst-key from crm_cust_info
-				(
-				SELECT
-				CASE 
-					WHEN LEN(TRIM(CID)) =13  THEN RIGHT(CID,LEN(CID)-3)
-					ELSE CID
-					END AS CID,
-				BDATE,
-				GEN
-				FROM bronze.erp_cust_az12
-				) as t
-			LEFT JOIN silver.crm_cust_info as cust
-			ON cust.cst_key = t.CID
-		) as t2
-			
+		CID,
+		BDATE,
+		CASE 
+		WHEN GEN IS NULL OR GEN = '' THEN cst_gndr
+		WHEN GEN ='F' THEN 'Female'
+		WHEN GEN = 'M' THEN 'Male'
+		ELSE GEN
+		END AS GEN
+	FROM -- TRIM CID to match with cst-key from crm_cust_info
+		(
+		SELECT
+		CASE 
+			WHEN LEN(TRIM(CID)) =13  THEN RIGHT(CID,LEN(CID)-3)
+			ELSE CID
+			END AS CID,
+		BDATE,
+		GEN
+		FROM bronze.erp_cust_az12
+		WHERE BDATE < GETDATE()
+		) as t
+	LEFT JOIN silver.crm_cust_info as cust
+	ON cust.cst_key = t.CID
+		
+------------------------- END: Insert into [silver].[erp_cust_az12]----------------------			
 
 GO
 
+------------------------- START : Insert into [silver].[erp_loc_a101]----------------------
+IF (SELECT COUNT(*) FROM silver.erp_loc_a101) != 0
+	BEGIN
+	TRUNCATE TABLE silver.erp_loc_a101
+	END;
+
+
+INSERT INTO [silver].[erp_loc_a101]
+           ([CID]
+           ,[CNTRY]
+		   )
+SELECT
+		CASE -- remove '-' from CID
+		WHEN CHARINDEX('-',CID) != 0 THEN TRIM(REPLACE(CID,'-',''))
+		ELSE TRIM(CID)
+		END as CID 
+	   ,CASE  -- Data enrichment for CNTRY
+		WHEN CNTRY = 'US' OR CNTRY = 'USA' THEN 'United States'
+		WHEN CNTRY = 'DE' THEN 'GERMANY' 
+		WHEN CNTRY = '' OR CNTRY IS NULL THEN 'N/A'
+		ELSE TRIM(CNTRY)
+		END AS CNTRY
+	FROM bronze.erp_loc_a101
+          
+GO
+
+------------------------- END : Insert into [silver].[erp_loc_a101]----------------------
   
      
+------------------------- START : Insert into [silver].[erp_px_cat_g1v2]----------------------
+IF (SELECT COUNT(*) FROM silver.erp_px_cat_g1v2) != 0
+	BEGIN
+	TRUNCATE TABLE silver.erp_px_cat_g1v2
+	END;
+INSERT INTO [silver].[erp_px_cat_g1v2]
+           ([ID]
+           ,[CAT]
+           ,[SUBCAT]
+           ,[MAINTENANCE]
+		   )
+	
+SELECT 
+	   CASE 
+	   WHEN [ID] = 'CO_PD' THEN 'CO_PE'
+	   ELSE ID
+	   END AS [ID]
+      ,[CAT]
+      ,[SUBCAT]
+      ,[MAINTENANCE]
+  FROM bronze.erp_px_cat_g1v2
+
+GO
+------------------------- END : Insert into [silver].[erp_px_cat_g1v2]----------------------

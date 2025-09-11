@@ -15,13 +15,12 @@ Purpose : this scripts creates temp-tables for Data Explorations to Load into Si
 -- If already exists, drop table
 USE tempdb;
 GO
-IF OBJECT_ID('#clean_CID') IS NOT NULL
-DROP TABLE #clean_CID;
+IF OBJECT_ID('##clean_CID') IS NOT NULL
+DROP TABLE ##clean_CID;
 
 -- IF not, create temp
 USE DataWareHouse;
 GO 
-
 WITH new_CID as 
 (
 SELECT
@@ -34,5 +33,11 @@ GEN
 FROM bronze.erp_cust_az12
 )
 SELECT *
-INTO #clean_CID
+INTO ##clean_CID
 FROM new_CID;
+
+SELECT *
+FROM tempdb.sys.tables
+
+
+
