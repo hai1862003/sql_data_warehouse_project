@@ -1,9 +1,10 @@
 /*
 ---------------------
-DATA Transformation & LOAD SILVER
+DATA procedure: Transformation & LOAD SILVER
 ---------------------
 PURPOSE:
-- This scripts load clean data from Bronze to Silver 
+- This scripts creates & alter PROCEDURE for: Clean + Load data from Bronze to Silver 
+- Includes: Logs, Error Handling, Duration measurements
 - Using Truncate & Insert
 
 WARNING:
@@ -12,224 +13,303 @@ WARNING:
 */
 
 ----------- START: Insert into [silver].[crm_cust_info] -------------
+CREATE OR ALTER PROCEDURE silver.load_silver AS
+BEGIN
+-- DECLARE variables
+	DECLARE @start_time DATETIME, @end_time DATETIME, @start_time_layer DATETIME,@end_time_layer DATETIME  ;
+	
+	BEGIN TRY
+	-- PRINT FOR CONSOLE
+		SET @start_time_layer = GETDATE()
+		PRINT '-----------------------------'
+		PRINT 'Loading Silver Layer'
+		PRINT '-----------------------------'
 
+		PRINT '------------------'
+		PRINT 'Loading CRM tables'
+		PRINT '------------------'
 
-IF (SELECT COUNT(*) FROM silver.crm_cust_info) != 0
-	TRUNCATE TABLE silver.crm_cust_info
+		SET @start_time = GETDATE()
+		IF (SELECT COUNT(*) FROM silver.crm_cust_info) != 0
+			BEGIN
+				PRINT'>> Truncating silver.crm_cust_info'
+				TRUNCATE TABLE silver.crm_cust_info
+			END
 
-INSERT INTO [silver].[crm_cust_info]
-           ([cst_id]
-           ,[cst_key]
-           ,[cst_firstname]
-           ,[cst_lastname]
-           ,[cst_marital_status]
-           ,[cst_gndr]
-           ,[cst_create_date]        
-		   )
-SELECT 
-		[cst_id]
-      ,[cst_key]
-      ,TRIM([cst_firstname]) -- remove leading spaces
-      ,TRIM([cst_lastname])  -- remove leading spaces
-      , CASE -- map marital_status to full_text
-	    WHEN UPPER(TRIM([cst_marital_status] ))= 'M' THEN 'Married'
-		WHEN UPPER(TRIM([cst_marital_status] )) = 'S' THEN 'Single'
-		ELSE 'N/A'
-		END AS cst_marital_status
-      ,CASE  -- map gender to full_text
-	   WHEN UPPER(TRIM([cst_gndr])) = 'F' THEN 'Female'
-	   WHEN  UPPER(TRIM([cst_gndr])) = 'M' THEN 'Male'
-	   ELSE 'N/A' 
-	   END AS cst_gndr
-      ,[cst_create_date]
-FROM   -- from crm_cust_info with clean 'cst_id' 
-	(SELECT *
-	 FROM 
-		(
-		SELECT *, ROW_NUMBER() OVER(PARTITION BY cst_id  ORDER BY cst_create_date Desc) as id_count
-		FROM bronze.crm_cust_info
-		) as a
-		WHERE id_count =1 AND cst_id IS NOT NULL
-	) as b;
-
------------ END: Insert into [silver].[crm_cust_info] -------------
-GO
------------ START: Insert into [silver].[crm_prod_info] -------------
-
--- logic for re-runs
-IF (SELECT COUNT(*) FROM silver.crm_prod_info) != 0
-	TRUNCATE TABLE silver.crm_prod_info
-
-INSERT INTO [silver].[crm_prod_info]
-		   ([prd_id]
-		   ,[cat_id]
-           ,[prd_key]
-           ,[prd_nm]
-           ,[prd_cost]
-           ,[prd_line]
-           ,[prd_start_dt]
-           ,[prd_end_dt]
-		   )
-SELECT 
-	  [prd_id] 
-	  ,REPLACE(SUBSTRING(prd_key,1,5 ),'-','_') as cat_id
-	  ,SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key
-      ,TRIM([prd_nm]) as prd_nm
-      ,[prd_cost]
-      ,CASE -- map abbreviation to Full Name
-	  WHEN [prd_line] = 'M' THEN 'Mountain'
-	  WHEN [prd_line] = 'S' THEN 'Sport'
-	  WHEN [prd_line] = 'R' THEN 'Road' 
-	  WHEN [prd_line] = 'T' THEN 'Touring'
-	  ELSE 'N/A'
-	  END AS prd_line
-      ,[prd_start_dt]
-      ,DATEADD(day,-1,LEAD(prd_start_dt) OVER(PARTITION BY prd_key ORDER BY prd_start_dt)) as prd_end_dt
-FROM bronze.crm_prod_info;
-
------------ END: Insert into [silver].[crm_prod_info] -------------
-GO
-
------------ START: Insert into [silver].[crm_sales_details] -------------
-
--- if data type of date columns from silver.crm_sales_details != date
-IF (SELECT COUNT(*) FROM silver.crm_sales_details) != 0
-	BEGIN
-	TRUNCATE TABLE silver.crm_sales_details
-	END;
-INSERT INTO [silver].[crm_sales_details]
-           ([sls_ord_num]
-           ,[sls_prd_key]
-           ,[sls_cust_id]
-           ,[sls_order_dt]
-           ,[sls_ship_dt]
-           ,[sls_due_dt]
-           ,[sls_sales]
-           ,[sls_quantity]
-           ,[sls_price]
-           )
-
-SELECT TRIM([sls_ord_num])
-      ,TRIM([sls_prd_key])
-      ,[sls_cust_id]
-      ,CASE  -- if valid convert to date, else NULL
-		    WHEN len(trim(str([sls_order_dt]))) != 8 THEN NULL
-			ELSE CONVERT(date, STR([sls_order_dt]),112)
-			END AS [sls_order_dt]
-      ,CASE 
-		    WHEN len(trim(str([sls_ship_dt]))) != 8 THEN NULL
-			ELSE CONVERT(date, STR([sls_ship_dt]),112)
-			END AS [sls_ship_dt]
-      ,CASE 
-		    WHEN len(trim(str([sls_due_dt]))) != 8 THEN NULL
-			ELSE CONVERT(date, STR([sls_due_dt]),112)
-			END AS [sls_due_dt]
-      ,CASE -- if sales = invalid => sales = price*quantity
-	WHEN sls_sales <=0 OR sls_sales IS NULL OR sls_sales!= abs(sls_price)*sls_quantity THEN abs(sls_price)*nullif(sls_quantity,0)
-	ELSE sls_sales
-	END as sls_sales -- 
-      ,[sls_quantity]
-      ,CASE -- if price = invalid => price = sales/quantity
-	WHEN sls_price IS NULL OR sls_price <=0 THEN abs(sls_sales)/NULLIF(sls_quantity,0)
-	ELSE sls_price 
-	END as sls_price
-  FROM [bronze].[crm_sales_details]
-  ;
-
------------ END: Insert into [silver].[crm_sales_details] -------------
-GO
-
-
-------------------------- START : Insert into [silver].[erp_cust_az12]----------------------
-IF (SELECT COUNT(*) FROM silver.erp_cust_az12) != 0
-	BEGIN
-	TRUNCATE TABLE silver.erp_cust_az12
-	END;
-
-INSERT INTO [silver].[erp_cust_az12]
-           ([CID]
-           ,[BDATE]
-           ,[GEN]
-		   )
-
-SELECT 
-		CID,
-		BDATE,
-		CASE 
-		WHEN GEN IS NULL OR GEN = '' THEN cst_gndr
-		WHEN GEN ='F' THEN 'Female'
-		WHEN GEN = 'M' THEN 'Male'
-		ELSE GEN
-		END AS GEN
-	FROM -- TRIM CID to match with cst-key from crm_cust_info
-		(
-		SELECT
-		CASE 
-			WHEN LEN(TRIM(CID)) =13  THEN RIGHT(CID,LEN(CID)-3)
-			ELSE CID
-			END AS CID,
-		BDATE,
-		GEN
-		FROM bronze.erp_cust_az12
-		WHERE BDATE < GETDATE()
-		) as t
-	LEFT JOIN silver.crm_cust_info as cust
-	ON cust.cst_key = t.CID
+		PRINT 'Inserting silver.crm_cust_info'
+		INSERT INTO [silver].[crm_cust_info]
+				   ([cst_id]
+				   ,[cst_key]
+				   ,[cst_firstname]
+				   ,[cst_lastname]
+				   ,[cst_marital_status]
+				   ,[cst_gndr]
+				   ,[cst_create_date]        
+				   )
+		SELECT 
+				[cst_id]
+			  ,[cst_key]
+			  ,TRIM([cst_firstname]) -- remove leading spaces
+			  ,TRIM([cst_lastname])  -- remove leading spaces
+			  , CASE -- map marital_status to full_text
+				WHEN UPPER(TRIM([cst_marital_status] ))= 'M' THEN 'Married'
+				WHEN UPPER(TRIM([cst_marital_status] )) = 'S' THEN 'Single'
+				ELSE 'N/A'
+				END AS cst_marital_status
+			  ,CASE  -- map gender to full_text
+			   WHEN UPPER(TRIM([cst_gndr])) = 'F' THEN 'Female'
+			   WHEN  UPPER(TRIM([cst_gndr])) = 'M' THEN 'Male'
+			   ELSE 'N/A' 
+			   END AS cst_gndr
+			  ,[cst_create_date]
+		FROM   -- from crm_cust_info with clean 'cst_id' 
+			(SELECT *
+			 FROM 
+				(
+				SELECT *, ROW_NUMBER() OVER(PARTITION BY cst_id  ORDER BY cst_create_date Desc) as id_count
+				FROM bronze.crm_cust_info
+				) as a
+				WHERE id_count =1 AND cst_id IS NOT NULL
+			) as b;
+		SET @end_time = GETDATE()
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '--------------------------------'
+		----------- END: Insert into [silver].[crm_cust_info] -------------
 		
-------------------------- END: Insert into [silver].[erp_cust_az12]----------------------			
+		----------- START: Insert into [silver].[crm_prod_info] -------------
 
-GO
+		SET @start_time = GETDATE()
+		-- logic for re-runs
+		IF (SELECT COUNT(*) FROM silver.crm_prod_info) != 0
+			BEGIN
+				PRINT'>> Truncating silver.crm_prod_info'
+				TRUNCATE TABLE silver.crm_prod_info
+			END
 
-------------------------- START : Insert into [silver].[erp_loc_a101]----------------------
-IF (SELECT COUNT(*) FROM silver.erp_loc_a101) != 0
-	BEGIN
-	TRUNCATE TABLE silver.erp_loc_a101
-	END;
+		PRINT'>> Inserting silver.crm_prod_info'
+		INSERT INTO [silver].[crm_prod_info]
+				   ([prd_id]
+				   ,[cat_id]
+				   ,[prd_key]
+				   ,[prd_nm]
+				   ,[prd_cost]
+				   ,[prd_line]
+				   ,[prd_start_dt]
+				   ,[prd_end_dt]
+				   )
+		SELECT 
+			  [prd_id] 
+			  ,REPLACE(SUBSTRING(prd_key,1,5 ),'-','_') as cat_id
+			  ,SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key
+			  ,TRIM([prd_nm]) as prd_nm
+			  ,[prd_cost]
+			  ,CASE -- map abbreviation to Full Name
+			  WHEN [prd_line] = 'M' THEN 'Mountain'
+			  WHEN [prd_line] = 'S' THEN 'Sport'
+			  WHEN [prd_line] = 'R' THEN 'Road' 
+			  WHEN [prd_line] = 'T' THEN 'Touring'
+			  ELSE 'N/A'
+			  END AS prd_line
+			  ,[prd_start_dt]
+			  ,DATEADD(day,-1,LEAD(prd_start_dt) OVER(PARTITION BY prd_key ORDER BY prd_start_dt)) as prd_end_dt
+		FROM bronze.crm_prod_info;
 
+		SET @end_time = GETDATE()
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '-----------------------------------'
+		----------- END: Insert into [silver].[crm_prod_info] -------------
+		
 
-INSERT INTO [silver].[erp_loc_a101]
-           ([CID]
-           ,[CNTRY]
-		   )
-SELECT
-		CASE -- remove '-' from CID
-		WHEN CHARINDEX('-',CID) != 0 THEN TRIM(REPLACE(CID,'-',''))
-		ELSE TRIM(CID)
-		END as CID 
-	   ,CASE  -- Data enrichment for CNTRY
-		WHEN CNTRY = 'US' OR CNTRY = 'USA' THEN 'United States'
-		WHEN CNTRY = 'DE' THEN 'GERMANY' 
-		WHEN CNTRY = '' OR CNTRY IS NULL THEN 'N/A'
-		ELSE TRIM(CNTRY)
-		END AS CNTRY
-	FROM bronze.erp_loc_a101
-          
-GO
+		----------- START: Insert into [silver].[crm_sales_details] -------------
 
-------------------------- END : Insert into [silver].[erp_loc_a101]----------------------
+		-- if data type of date columns from silver.crm_sales_details != date
+		SET @start_time = GETDATE()
+		IF (SELECT COUNT(*) FROM silver.crm_sales_details) != 0
+			BEGIN
+			PRINT'>> Truncating silver.crm_sales_details'
+			TRUNCATE TABLE silver.crm_sales_details
+			END;
+
+		PRINT'>> Inserting silver.crm_sales_details'
+		INSERT INTO [silver].[crm_sales_details]
+				   ([sls_ord_num]
+				   ,[sls_prd_key]
+				   ,[sls_cust_id]
+				   ,[sls_order_dt]
+				   ,[sls_ship_dt]
+				   ,[sls_due_dt]
+				   ,[sls_sales]
+				   ,[sls_quantity]
+				   ,[sls_price]
+				   )
+
+		SELECT TRIM([sls_ord_num])
+			  ,TRIM([sls_prd_key])
+			  ,[sls_cust_id]
+			  ,CASE  -- if valid convert to date, else NULL
+					WHEN len(trim(str([sls_order_dt]))) != 8 THEN NULL
+					ELSE CONVERT(date, STR([sls_order_dt]),112)
+					END AS [sls_order_dt]
+			  ,CASE 
+					WHEN len(trim(str([sls_ship_dt]))) != 8 THEN NULL
+					ELSE CONVERT(date, STR([sls_ship_dt]),112)
+					END AS [sls_ship_dt]
+			  ,CASE 
+					WHEN len(trim(str([sls_due_dt]))) != 8 THEN NULL
+					ELSE CONVERT(date, STR([sls_due_dt]),112)
+					END AS [sls_due_dt]
+			  ,CASE -- if sales = invalid => sales = price*quantity
+			WHEN sls_sales <=0 OR sls_sales IS NULL OR sls_sales!= abs(sls_price)*sls_quantity THEN abs(sls_price)*nullif(sls_quantity,0)
+			ELSE sls_sales
+			END as sls_sales -- 
+			  ,[sls_quantity]
+			  ,CASE -- if price = invalid => price = sales/quantity
+			WHEN sls_price IS NULL OR sls_price <=0 THEN abs(sls_sales)/NULLIF(sls_quantity,0)
+			ELSE sls_price 
+			END as sls_price
+		  FROM [bronze].[crm_sales_details]
+		  ;
+
+		SET @end_time = GETDATE()
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '-----------------------------------'
+		----------- END: Insert into [silver].[crm_sales_details] -------------
+		
+		
+
+		PRINT '------------------'
+		PRINT 'Loading ERP tables'
+		PRINT '------------------'
+		------------------------- START : Insert into [silver].[erp_cust_az12]----------------------
+		SET @start_time = GETDATE()
+		IF (SELECT COUNT(*) FROM silver.erp_cust_az12) != 0
+			BEGIN
+			PRINT'>> Truncating silver.erp_cust_az12'
+			TRUNCATE TABLE silver.erp_cust_az12
+			END;
+
+		PRINT'>> Inserting silver.erp_cust_az12'
+		INSERT INTO [silver].[erp_cust_az12]
+				   ([CID]
+				   ,[BDATE]
+				   ,[GEN]
+				   )
+
+		SELECT 
+				CID,
+				BDATE,
+				CASE 
+				WHEN GEN IS NULL OR GEN = '' THEN cst_gndr
+				WHEN GEN ='F' THEN 'Female'
+				WHEN GEN = 'M' THEN 'Male'
+				ELSE GEN
+				END AS GEN
+			FROM -- TRIM CID to match with cst-key from crm_cust_info
+				(
+				SELECT
+				CASE 
+					WHEN LEN(TRIM(CID)) =13  THEN RIGHT(CID,LEN(CID)-3)
+					ELSE CID
+					END AS CID,
+				BDATE,
+				GEN
+				FROM bronze.erp_cust_az12
+				WHERE BDATE < GETDATE()
+				) as t
+			LEFT JOIN silver.crm_cust_info as cust
+			ON cust.cst_key = t.CID
+
+		SET @end_time = GETDATE()
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '-----------------------------------'		
+		------------------------- END: Insert into [silver].[erp_cust_az12]----------------------			
+
+		
+
+		------------------------- START : Insert into [silver].[erp_loc_a101]----------------------
+		SET @start_time = GETDATE()
+		IF (SELECT COUNT(*) FROM silver.erp_loc_a101) != 0
+			BEGIN
+			PRINT'>> Truncating silver.erp_loc_a101'
+			TRUNCATE TABLE silver.erp_loc_a101
+			END;
+
+		PRINT'>> Inserting silver.erp_loc_a101'
+		INSERT INTO [silver].[erp_loc_a101]
+				   ([CID]
+				   ,[CNTRY]
+				   )
+		SELECT
+				CASE -- remove '-' from CID
+				WHEN CHARINDEX('-',CID) != 0 THEN TRIM(REPLACE(CID,'-',''))
+				ELSE TRIM(CID)
+				END as CID 
+			   ,CASE  -- Data enrichment for CNTRY
+				WHEN CNTRY = 'US' OR CNTRY = 'USA' THEN 'United States'
+				WHEN CNTRY = 'DE' THEN 'GERMANY' 
+				WHEN CNTRY = '' OR CNTRY IS NULL THEN 'N/A'
+				ELSE TRIM(CNTRY)
+				END AS CNTRY
+			FROM bronze.erp_loc_a101
+
+		SET @end_time = GETDATE()
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '-----------------------------------'		          
+		
+
+		------------------------- END : Insert into [silver].[erp_loc_a101]----------------------
   
      
-------------------------- START : Insert into [silver].[erp_px_cat_g1v2]----------------------
-IF (SELECT COUNT(*) FROM silver.erp_px_cat_g1v2) != 0
-	BEGIN
-	TRUNCATE TABLE silver.erp_px_cat_g1v2
-	END;
-INSERT INTO [silver].[erp_px_cat_g1v2]
-           ([ID]
-           ,[CAT]
-           ,[SUBCAT]
-           ,[MAINTENANCE]
-		   )
+		------------------------- START : Insert into [silver].[erp_px_cat_g1v2]----------------------
+		SET @start_time = GETDATE()
+		IF (SELECT COUNT(*) FROM silver.erp_px_cat_g1v2) != 0
+			BEGIN
+			PRINT'>> Truncating silver.erp_px_cat_g1v2'
+			TRUNCATE TABLE silver.erp_px_cat_g1v2
+			END;
+
+		PRINT'>> Inserting silver.erp_px_cat_g1v2'
+		INSERT INTO [silver].[erp_px_cat_g1v2]
+				   ([ID]
+				   ,[CAT]
+				   ,[SUBCAT]
+				   ,[MAINTENANCE]
+				   )
 	
-SELECT 
-	   CASE 
-	   WHEN [ID] = 'CO_PD' THEN 'CO_PE'
-	   ELSE ID
-	   END AS [ID]
-      ,[CAT]
-      ,[SUBCAT]
-      ,[MAINTENANCE]
-  FROM bronze.erp_px_cat_g1v2
+		SELECT 
+			   CASE 
+			   WHEN [ID] = 'CO_PD' THEN 'CO_PE'
+			   ELSE ID
+			   END AS [ID]
+			  ,[CAT]
+			  ,[SUBCAT]
+			  ,[MAINTENANCE]
+		  FROM bronze.erp_px_cat_g1v2
+
+		SET @end_time = GETDATE() 
+		PRINT '>>> LOAD DURATION: ' + CAST(DATEDIFF(second,@start_time, @end_time) as NVARCHAR) + 'seconds'
+		PRINT '-----------------------------------'		
+
+		SET @end_time_layer = GETDATE()
+		PRINT '>>>>> TOTAL DURATION: ' + CAST(DATEDIFF(second, @start_time_layer,@end_time_layer) AS NVARCHAR) + 'second'
+	END TRY
+
+		-- ERROR CATCHING
+	BEGIN CATCH
+		PRINT '===================================='
+		PRINT 'Error Occured During loading Silver Layer'
+		PRINT 'Error Message:' + ERROR_MESSAGE()
+		PRINT 'Error Line: ' + CAST (ERROR_LINE() AS NVARCHAR)
+ 		PRINT 'Error Number: ' + Cast(ERROR_NUMBER() AS NVARCHAR)
+		PRINT 'Error State: ' + CAST (ERROR_STATE() AS NVARCHAR)
+ 		PRINT '===================================='
+	END CATCH
+
+END
 
 GO
-------------------------- END : Insert into [silver].[erp_px_cat_g1v2]----------------------
+
+
+
+	------------------------- END : Insert into [silver].[erp_px_cat_g1v2]----------------------
+
