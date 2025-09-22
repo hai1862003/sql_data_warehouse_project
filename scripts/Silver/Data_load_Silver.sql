@@ -1,18 +1,26 @@
 /*
 ---------------------
-DATA procedure: Transformation & LOAD SILVER
+Stored procedure: Transformation & LOAD SILVER
 ---------------------
 PURPOSE:
-- This scripts creates & alter PROCEDURE for: Clean + Load data from Bronze to Silver 
+- This scripts creates & alter PROCEDURE for: Clean + Load data from Bronze to Silver layer
 - Includes: Logs, Error Handling, Duration measurements
-- Using Truncate & Insert
+
+ACTIVITIES:
+- This procedure TRUNCATE all current tables in silver layer & INSERT 
+
+PARAMETERS:
+- No parameters
+
+USAGE:
+ EXEC silver.load_silver
 
 WARNING:
 - Running this scripts would truncate all current data in silver schema
-
 */
 
 ----------- START: Insert into [silver].[crm_cust_info] -------------
+
 CREATE OR ALTER PROCEDURE silver.load_silver AS
 BEGIN
 -- DECLARE variables
